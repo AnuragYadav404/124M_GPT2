@@ -8,6 +8,7 @@ from torch.nn import functional as F
 block_size = 8 # block size is the length of tokens our model sees for predicting the next probable token
 batch_size = 4 # this defines the batch size of examples we feed in the model for training/inference
 n_embd = 64
+learning_rate = 3e-4
 # first we need to open and read the ./dataset/input.txt as utf-8 text file, and store the content in a variable called data
 with open('./dataset/input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
@@ -154,10 +155,19 @@ class GPT2Model(nn.Module):
 
 model = GPT2Model()
 
-for _ in range(2):
+# let's add a optimizer here as well
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+steps = 1000
+for step in range(steps):
+    optimizer.zero_grad()
     xb, yb = get_batch()
     logits, loss = model(xb, yb)
-    print(loss)
+    if(step%10 == 0):
+        print(loss)
+    # now we calculate gradients
+    loss.backward()
+    # we now to update the params
+    optimizer.step()
     # here loss is a numerical value
     # logits is of size (B,T,C)
     # why is logits important? -> for computing cross entropy loss
