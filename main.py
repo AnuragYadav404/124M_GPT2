@@ -89,7 +89,20 @@ class Head(nn.Module):
 
         return out
 
+
+class MultiAttentionHead(nn.Module):
+    # we concat a set attention heads
+    # number of attention heads can be distributed based off head_size
+    def __init__(self, num_heads, head_size, n_embd):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size=head_size, n_embd=n_embd) for _ in range(num_heads)])
+        self.linear = nn.Linear(num_heads*head_size, n_embd)
+    def forward(self, xb):
+        out = torch.cat([h(xb) for h in self.heads], dim=-1)
+        out = self.linear(out)
+        return out # out is (B,T,n_embd)
         
+
 head_size = 32
 
 
@@ -98,12 +111,15 @@ class GPT2Model(nn.Module):
     def __init__(self):
         super().__init__()
         self.token_emb_table = nn.Embedding(vocab_size, n_embd)
-        self.attention_head = Head(head_size=head_size, n_embd=n_embd)
-        self.lm_head = nn.Linear(head_size, vocab_size)
+        self.multi_attention_head = MultiAttentionHead(4,16,n_embd=n_embd)
+        self.multi_attention_head2 = MultiAttentionHead(4,16,n_embd=n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, xb, yb=None):
         xb = self.token_emb_table(xb)
-        xb = self.attention_head(xb)
+        xb = self.multi_attention_head(xb)
+        xb = self.multi_attention_head2(xb)
+
         logits = self.lm_head(xb)
 
         if(yb is None):
@@ -137,7 +153,7 @@ class GPT2Model(nn.Module):
 model = GPT2Model()
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-steps = 10
+steps = 100
 for step in range(steps):
     optimizer.zero_grad()
     xb, yb = get_batch()
