@@ -1,29 +1,73 @@
 # library imports:
+from pathlib import Path
+
 import tiktoken
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from tokenizers import Tokenizer
+
+device = 'cpu'
+if torch.cuda.is_available():
+    device = 'cuda'
+elif torch.backends.mps.is_available():
+    device = 'mps'  
+
 
 # some parameters for our model
-block_size = 16 # block size is the length of tokens our model sees for predicting the next probable token
-batch_size = 8 # this defines the batch size of examples we feed in the model for training/inference
+block_size = 64 # block size is the length of tokens our model sees for predicting the next probable token
+batch_size = 64 # this defines the batch size of examples we feed in the model for training/inference
 n_embd = 256
 learning_rate = 3e-4
 # first we need to open and read the ./dataset/input.txt as utf-8 text file, and store the content in a variable called data
 with open('./dataset/input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
+
+chars = sorted(list(set(text)))
+vocab_size = len(chars)
+
+stoi = { ch:i for i,ch in enumerate(chars) }
+# print(stoi)
+itos = { i:ch for i,ch in enumerate(chars) }
+# print(itos)
+# what does decoder do?
+# takes a number, outputs a character
+def encode(s):
+    return [stoi[c] for c in s]
+
+def decode(l):
+    return ''.join([itos[i] for i in l])
+
+
+
+# """
+# vocab with characters only:
+
+# get characters from the data:
+data = torch.tensor(encode(text), dtype=torch.long, device=device)
+# """
+
+"""
 tokenizer = tiktoken.get_encoding('gpt2')
 
-data = torch.tensor(tokenizer.encode(text), dtype=torch.long) # data goes to device
+data = torch.tensor(tokenizer.encode(text), dtype=torch.long, device=device) # data goes to device
 vocab_size = tokenizer.n_vocab
+
+"""
+# we can also build our own vocab, that is much more suited for the shakespeare dataset
+# instead of using a tokenizer such as gpt2
+# we can instead build our own custom tokenizer
+# we can use a byte level tokenizer, which is a tokenizer that encodes each character as a byte, and then decodes it back to the original character
+# the following code implements it:
+
 
 
 
 def get_batch(split=None):
     # need to create train, validation splits
 
-    start_idx = torch.randint(len(data)-block_size-1, (batch_size,))
+    start_idx = torch.randint(len(data)-block_size-1, (batch_size,), device=device)
     # print(start_idx)
     xb = torch.stack([data[idx:idx+block_size] for idx in start_idx])
     yb = torch.stack([data[idx+1:idx+1+block_size] for idx in start_idx])
@@ -138,8 +182,6 @@ class Block(nn.Module):
         return x
 
 
-
-
 class GPT2Model(nn.Module):
 
     def __init__(self):
@@ -152,25 +194,6 @@ class GPT2Model(nn.Module):
             Block(n_embd=n_embd, num_heads=8),
             Block(n_embd=n_embd, num_heads=8),
             Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
-            Block(n_embd=n_embd, num_heads=8),
             nn.LayerNorm(n_embd)
         )
         self.lm_head = nn.Linear(n_embd, vocab_size)
@@ -178,7 +201,7 @@ class GPT2Model(nn.Module):
     def forward(self, xb, yb=None):
         B,T = xb.shape
         tok_emb = self.token_emb_table(xb)
-        pos_emb = self.pos_emb_table(torch.arange(T))
+        pos_emb = self.pos_emb_table(torch.arange(T, device=device))
         x = tok_emb + pos_emb
         x = self.block_net(x)
 
@@ -212,7 +235,7 @@ class GPT2Model(nn.Module):
         return xb
 
 
-model = GPT2Model()
+model = GPT2Model().to(device=device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 steps = 100
@@ -226,11 +249,11 @@ for step in range(steps):
     optimizer.step()
 
 
-xb_gen = torch.tensor([[0], [9]])
-generated_tensor = model.generate(xb_gen, 20)
+xb_gen = torch.tensor([[0]], dtype=torch.long).to(device=device)
+generated_tensor = model.generate(xb_gen, 60)
 print(generated_tensor.shape)
 tensor_values = generated_tensor[0].tolist()
 
 # we need to map these token id based on vocab
 # decode function takes raw tensor values
-print(tokenizer.decode(tensor_values))
+print(decode(tensor_values))
