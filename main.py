@@ -7,7 +7,7 @@ from torch.nn import functional as F
 # some parameters for our model
 block_size = 8 # block size is the length of tokens our model sees for predicting the next probable token
 batch_size = 4 # this defines the batch size of examples we feed in the model for training/inference
-n_embd = 64
+n_embd = 256
 learning_rate = 3e-4
 # first we need to open and read the ./dataset/input.txt as utf-8 text file, and store the content in a variable called data
 with open('./dataset/input.txt', 'r', encoding='utf-8') as f:
@@ -103,7 +103,34 @@ class MultiAttentionHead(nn.Module):
         return out # out is (B,T,n_embd)
         
 
-head_size = 32
+class FeedForward(nn.Module):
+    def __init__(self, n_embd):
+        super().__init__()
+        self.linear1 = nn.Linear(n_embd, 4*n_embd)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(4*n_embd, n_embd)
+    
+    def forward(self,x):
+        out = self.linear1(x)
+        out = self.relu(out)
+        out = self.linear2(out)
+        return out
+
+
+class Block(nn.Module):
+    def __init__(self, n_embd, num_heads):
+        super().__init__()
+        self.head_size = n_embd//num_heads
+        self.multi_head_attention1 = MultiAttentionHead(num_heads=num_heads,head_size=self.head_size,n_embd=n_embd)
+        self.multi_head_attention2 = MultiAttentionHead(num_heads=num_heads,head_size=self.head_size,n_embd=n_embd)
+        self.ffwd = FeedForward(n_embd)
+    def forward(self,x):
+        x = x + self.multi_head_attention1(x)
+        x = x + self.multi_head_attention2(x)
+        x = x + self.ffwd(x)
+        return x
+
+
 
 
 class GPT2Model(nn.Module):
@@ -112,7 +139,11 @@ class GPT2Model(nn.Module):
         super().__init__()
         self.token_emb_table = nn.Embedding(vocab_size, n_embd)
         self.pos_emb_table = nn.Embedding(block_size, n_embd)
-        self.multi_attention_head = MultiAttentionHead(4,16,n_embd=n_embd)
+        self.block1 = Block(n_embd=n_embd, num_heads=8)
+        self.block_net = nn.Sequential(
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+        )
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, xb, yb=None):
@@ -120,8 +151,8 @@ class GPT2Model(nn.Module):
         tok_emb = self.token_emb_table(xb)
         pos_emb = self.pos_emb_table(torch.arange(T))
         x = tok_emb + pos_emb
-        x = self.multi_attention_head(x)
-
+        x = self.block1(x)
+        x = self.block_net(x)
 
         logits = self.lm_head(x)
 
