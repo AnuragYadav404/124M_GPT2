@@ -73,7 +73,8 @@ class Head(nn.Module):
         # "
         # TxT
         # the result would be a 
-        wei = q@k.transpose(-2, -1)
+        head_size = q.shape[2]
+        wei = q@k.transpose(-2, -1)*(head_size**-0.5)
         wei = wei.masked_fill(self.tril[:T,:T]==0, float('-inf'))
         wei = wei.softmax(dim=-1)
 
@@ -141,6 +142,8 @@ class GPT2Model(nn.Module):
         self.pos_emb_table = nn.Embedding(block_size, n_embd)
         self.block1 = Block(n_embd=n_embd, num_heads=8)
         self.block_net = nn.Sequential(
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
             Block(n_embd=n_embd, num_heads=8),
             Block(n_embd=n_embd, num_heads=8),
         )
