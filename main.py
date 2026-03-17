@@ -111,16 +111,19 @@ class GPT2Model(nn.Module):
     def __init__(self):
         super().__init__()
         self.token_emb_table = nn.Embedding(vocab_size, n_embd)
+        self.pos_emb_table = nn.Embedding(block_size, n_embd)
         self.multi_attention_head = MultiAttentionHead(4,16,n_embd=n_embd)
-        self.multi_attention_head2 = MultiAttentionHead(4,16,n_embd=n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, xb, yb=None):
-        xb = self.token_emb_table(xb)
-        xb = self.multi_attention_head(xb)
-        xb = self.multi_attention_head2(xb)
+        B,T = xb.shape
+        tok_emb = self.token_emb_table(xb)
+        pos_emb = self.pos_emb_table(torch.arange(T))
+        x = tok_emb + pos_emb
+        x = self.multi_attention_head(x)
 
-        logits = self.lm_head(xb)
+
+        logits = self.lm_head(x)
 
         if(yb is None):
             loss=None
