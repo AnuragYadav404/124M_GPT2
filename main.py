@@ -5,8 +5,8 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # some parameters for our model
-block_size = 8 # block size is the length of tokens our model sees for predicting the next probable token
-batch_size = 4 # this defines the batch size of examples we feed in the model for training/inference
+block_size = 16 # block size is the length of tokens our model sees for predicting the next probable token
+batch_size = 8 # this defines the batch size of examples we feed in the model for training/inference
 n_embd = 256
 learning_rate = 3e-4
 # first we need to open and read the ./dataset/input.txt as utf-8 text file, and store the content in a variable called data
@@ -124,10 +124,16 @@ class Block(nn.Module):
         self.head_size = n_embd//num_heads
         self.multi_head_attention1 = MultiAttentionHead(num_heads=num_heads,head_size=self.head_size,n_embd=n_embd)
         self.multi_head_attention2 = MultiAttentionHead(num_heads=num_heads,head_size=self.head_size,n_embd=n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
         self.ffwd = FeedForward(n_embd)
     def forward(self,x):
-        x = x + self.multi_head_attention1(x)
-        x = x + self.multi_head_attention2(x)
+        # need to implement leyer normalization here  
+        # example: x = x + self.multi_head_attention1(self.ln1(x))
+        # here layer normalization is applied before multi ahead because it is more stable for training, and it is also used in the original gpt paper, but it can be applied after as well, but it is not as stable for training
+        # in original gpt paper
+        x = x + self.multi_head_attention1(self.ln1(x))
+        x = x + self.multi_head_attention2(self.ln2(x))
         x = x + self.ffwd(x)
         return x
 
@@ -140,12 +146,32 @@ class GPT2Model(nn.Module):
         super().__init__()
         self.token_emb_table = nn.Embedding(vocab_size, n_embd)
         self.pos_emb_table = nn.Embedding(block_size, n_embd)
-        self.block1 = Block(n_embd=n_embd, num_heads=8)
         self.block_net = nn.Sequential(
             Block(n_embd=n_embd, num_heads=8),
             Block(n_embd=n_embd, num_heads=8),
             Block(n_embd=n_embd, num_heads=8),
             Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            Block(n_embd=n_embd, num_heads=8),
+            nn.LayerNorm(n_embd)
         )
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
@@ -154,7 +180,6 @@ class GPT2Model(nn.Module):
         tok_emb = self.token_emb_table(xb)
         pos_emb = self.pos_emb_table(torch.arange(T))
         x = tok_emb + pos_emb
-        x = self.block1(x)
         x = self.block_net(x)
 
         logits = self.lm_head(x)
