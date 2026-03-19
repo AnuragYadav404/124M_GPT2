@@ -113,7 +113,7 @@ class CasualSelfAttention(nn.Module):
         v = v.view(B,T,self.num_heads, self.head_size).transpose(1,2) # so v is now [B,num_heads,T, head_size]
 
         #need to implement the flash-attention, and also compare the results
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True)
         
         out = out.transpose(1, 2).contiguous().view(B, T, self.num_heads * self.head_size) # so out is now (B,T,n_embd)
         
@@ -228,9 +228,15 @@ class GPT2Model(nn.Module):
 
                 logits, _ = self(xb_cond) # here loss is mostly useless
 
-                logits = logits[:, -1, :] # so logits is now (B,C) where C is vocab size
-                probs = F.softmax(logits, dim=-1) # we calculate the probabilities for the last token only, so probs is (B,C)
-                topk_probs, topk_indices = torch.topk(probs, k=50, dim=-1) # now we pick the top k tokens, so topk_probs is (B,k) and topk_indices is (B,k)
+                # let's add temperature here: 
+                # by adding temp, we can control the randomness of the output, higher temp means more random, lower temp means more deterministic
+                # temperature = 0.8
+                # logits = logits / temperature
+                logits = logits[:, -1, :] / 0.4 # so logits is now (B,C) where C is vocab size
+
+                topk_probs, topk_indices = torch.topk(logits, k=50, dim=-1) # now we pick the top k tokens, so topk_probs is (B,k) and topk_indices is (B,k)
+
+                probs = F.softmax(topk_probs, dim=-1) # we calculate the probabilities for the last token only, so probs is (B,C)
 
                 ix = torch.multinomial(topk_probs, num_samples=1) # multinomial will sample from the top k probabilities, so ix is (B,1) where the value is the index of the token in the top k
                 # so ix is the index of the token in the top k, we need to convert it to the index in the vocab
@@ -256,7 +262,7 @@ print(f'Total parameters: {total_params}')
 total_tokens = batch_size*block_size*steps
 print(f'Total tokens trained on: {total_tokens}')
 
-for step in range(steps):
+for step in range(100):
     t0=time.time()
     optimizer.zero_grad()
     xb, yb = get_batch()
