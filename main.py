@@ -37,32 +37,6 @@ debug_block_stats = False
 with open('./dataset/input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
-"""
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
-
-stoi = { ch:i for i,ch in enumerate(chars) }
-# print(stoi)
-itos = { i:ch for i,ch in enumerate(chars) }
-# print(itos)
-# what does decoder do?
-# takes a number, outputs a character
-def encode(s):
-    return [stoi[c] for c in s]
-
-def decode(l):
-    return ''.join([itos[i] for i in l])
-"""
-
-
-"""
-# vocab with characters only:
-
-# get characters from the data:
-data = torch.tensor(encode(text), dtype=torch.long)
-# """
-
-
 tokenizer = tiktoken.get_encoding('gpt2')
 
 data = torch.tensor(tokenizer.encode(text), dtype=torch.long, device=device) # data goes to device
@@ -120,6 +94,7 @@ def get_batch(split=None):
 class CasualSelfAttention(nn.Module):
     def __init__(self, num_heads, head_size, n_embd, block_size):
         super().__init__()
+
         self.c_attn = nn.Linear(n_embd, 3*n_embd)
         self.c_proj = nn.Linear(n_embd, n_embd)
         self.c_proj.NANOGPT_SCALE_INIT = 1
@@ -137,24 +112,28 @@ class CasualSelfAttention(nn.Module):
         q = q.view(B,T,self.num_heads, self.head_size).transpose(1,2) # so q is now [B,num_heads,T, head_size]
         v = v.view(B,T,self.num_heads, self.head_size).transpose(1,2) # so v is now [B,num_heads,T, head_size]
 
+        #need to implement the flash-attention, and also compare the results
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        
+        out = out.transpose(1, 2).contiguous().view(B, T, self.num_heads * self.head_size) # so out is now (B,T,n_embd)
+        
         # now we can do the attention
-        wei = q@k.transpose(-2, -1)*(self.head_size**-0.5) # wei is B,nh,T,T
-        wei = wei.masked_fill(self.tril[:,:,:T,:T]==0, float('-inf'))
-        wei = wei.softmax(dim=-1) # wei is (B,nh,T,T)
+        # wei = q@k.transpose(-2, -1)*(self.head_size**-0.5) # wei is B,nh,T,T
+        # wei = wei.masked_fill(self.tril[:,:,:T,:T]==0, float('-inf'))
+        # wei = wei.softmax(dim=-1) # wei is (B,nh,T,T)
 
-        out = wei@v # (B,nh,T,T) @ (B,nh,T,hs) -> B,nh,T,hs
-        out = out.transpose(1,2).contiguous().view(B,T,self.num_heads*self.head_size) # so out is now (B,T,n_embd)
+        # out = wei@v # (B,nh,T,T) @ (B,nh,T,hs) -> B,nh,T,hs
+        # out = out.transpose(1,2).contiguous().view(B,T,self.num_heads*self.head_size) # so out is now (B,T,n_embd)
+        
+        
         out = self.c_proj(out) # so out is now (B,T,n_embd) 
-
         return out
 
-
-        
 
 class MLP(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
-        self.linear1 = nn.Linear(n_embd, 4*n_embd)
+        self.linear1 = nn.Linear(n_embd, 4*n_embd) 
         self.gelu = nn.GELU(approximate='tanh')
         self.linear2 = nn.Linear(4*n_embd, n_embd)
         self.linear2.NANOGPT_SCALE_INIT = 1
@@ -170,7 +149,6 @@ class Block(nn.Module):
     def __init__(self, n_embd, num_heads):
         super().__init__()
         self.head_size = n_embd//num_heads
-        # self.multi_head_attention1 = MultiAttentionHead(num_heads=num_heads,head_size=self.head_size,n_embd=n_embd)
         self.cs_attn = CasualSelfAttention(num_heads=num_heads, head_size=self.head_size, n_embd=n_embd, block_size=block_size)
         self.ln1 = nn.LayerNorm(n_embd)
         self.mlp = MLP(n_embd)
@@ -193,7 +171,6 @@ class GPT2Model(nn.Module):
             ln_f = nn.LayerNorm(n_embd)
         ))
 
-
         self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
         # we can use same lm_head and token_emb_table because of weight tying
         self.transformer.wte.weight = self.lm_head.weight
@@ -202,28 +179,17 @@ class GPT2Model(nn.Module):
 
 
     def _init_weights(self, module):
-        # we also need to set bias terms to zero
-        
+
         std = 0.02
         if isinstance(module, nn.Linear):  
             if hasattr(module, 'NANOGPT_SCALE_INIT'):
                 std *= (2*len(self.transformer.h))**-0.5
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
             if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
+                torch.nn.init.zeros_(module.bias) # even the biases are init to zeros
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
         
-
-    # def _print_weight_statistics(self, module):
-    #     # here we don't want to print every parameters
-    #     # but only the model layers as a whole statistic
-    #     # so we will iterate layer wise and print the mean and std of the weights in each layer
-    #     for name, param in self.named_parameters():
-    #         if 'transformer.h' in name:
-                # print(f'{name}: mean={param.mean().item()}, std={param.std().item()}')  
-
-
 
     def forward(self, xb, yb=None):
         B,T = xb.shape
@@ -305,6 +271,8 @@ for step in range(steps):
         dt = (t1-t0)*1000
         print(f'token throughput: {B*T/dt} tokens/ms, Loss: {loss.item()}')
     loss.backward()
+    # we also want to do gradient clipping here, which we will do via norm grad clip:
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
     optimizer.step()
 
 
