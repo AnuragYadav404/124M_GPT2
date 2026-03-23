@@ -69,7 +69,7 @@ def get_batch(split=None):
 
 #         # todo: F.scaled_dot_product_attention
 #         head_size = q.shape[2]
-#         wei = q@k.transpose(-2, -1)*(head_size**-0.5)
+#         wei = q@k.transpose(-2, -1)*(head_size**-0.5) @ q@k would give us: 
 #         wei = wei.masked_fill(self.tril[:T,:T]==0, float('-inf'))
 #         wei = wei.softmax(dim=-1)
 
