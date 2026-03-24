@@ -21,15 +21,15 @@ torch.mps.manual_seed(1337)
 
 @dataclass
 class GPTConfig:
-    block_size: int = 256
+    block_size: int = 128
     batch_size: int = 32
     n_embd: int = 512
     learning_rate: float = 3e-4
 
 
-block_size = 64 
+block_size = 128 
 batch_size = 32 
-n_embd = 768
+n_embd = 512
 learning_rate = 1e-4
 max_grad_norm = 1.0
 debug_block_stats = False
@@ -90,6 +90,32 @@ def get_batch(split=None):
 #         out = self.linear(out)
 #         return out # out is (B,T,n_embd)
 
+class CustomRoFormerSinusoidalPositionalEmbedding(nn.Embedding):
+    def __init__(self, seq_len: int, n_embd: int):
+        super().__init__(seq_len, n_embd) # so now self.weight is of size seq_len x n_embd and initialized. We need to overwrite them
+        self.weight = self._init_weight(self.weight)
+
+    @staticmethod
+    def _init_weight(out: nn.Parameter):
+        seq_len,n_embd = out.shape
+        out.requires_grad = False 
+        i = torch.arange(1, n_embd/2+1, dtype=float) # so i becomes [1...d/2]
+        # we get a user warning here
+        thetas = (1/(10000**(2*(i-1)/n_embd))) # thetas are of shape: d/2
+        positions = torch.arange(seq_len).unsqueeze(1) # pos of shape seq_len
+        m_theta = positions*thetas # shape: seq_len x d/2
+        cos =(m_theta.cos()) # seq_len x d/2
+        sin =(m_theta.sin()) # seq_len x d/2
+        # out = torch.cat([sin, cos], dim=-1) # seq_len x d # incorrect, as out loses the nn.Parameter properties, so we will assign them separately
+        out[:, :n_embd//2] = sin
+        out[:, n_embd//2:] = cos
+        out.detach_()
+        return out
+    @torch.no_grad()
+    def forward(self, seq_len):
+        positions = torch.arange(seq_len, device=self.weight.device)
+        return super().forward(positions)
+
     
 class CasualSelfAttention(nn.Module):
     def __init__(self, num_heads, head_size, n_embd, block_size):
@@ -101,6 +127,18 @@ class CasualSelfAttention(nn.Module):
         self.num_heads = num_heads
         self.head_size = head_size
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
+        self.embed_positions = CustomRoFormerSinusoidalPositionalEmbedding(seq_len=block_size, n_embd=head_size)
+
+    def apply_rotary_positional_embedding(self, x, sinusoidal_pos):
+        # original dimensions of x is: (B,nh,T,d)
+        if sinusoidal_pos is None:
+            return x
+        sin, cos = sinusoidal_pos # sin and cos are of shape: (1,1,T,d/2)
+        x1, x2 = x[..., 0::2], x[..., 1::2] # here x1 is say (B,nh,T,d/2)
+        # print(x1.shape, x2.shape, sin.shape, cos.shape)
+        return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1) # (B,nh,T, d/2 *2) => (B,nh,T,d) what size does this become?
+
+
         
     def forward(self,x):
         B,T,n_embd = x.shape
@@ -111,6 +149,11 @@ class CasualSelfAttention(nn.Module):
         k = k.view(B,T,self.num_heads, self.head_size).transpose(1,2) # so k is now [B,num_heads,T, head_size]
         q = q.view(B,T,self.num_heads, self.head_size).transpose(1,2) # so q is now [B,num_heads,T, head_size]
         v = v.view(B,T,self.num_heads, self.head_size).transpose(1,2) # so v is now [B,num_heads,T, head_size]
+
+        # Apply RoPE positional embedding to q and k
+        sinusodial_pos = self.embed_positions(T)[ None, None, :, : ].chunk(2, dim=-1) 
+        q = self.apply_rotary_positional_embedding(q, sinusodial_pos)
+        k = self.apply_rotary_positional_embedding(k, sinusodial_pos)   
 
         #need to implement the flash-attention, and also compare the results
         out = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True)
@@ -166,7 +209,7 @@ class GPT2Model(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(vocab_size, n_embd),
-            wpe = nn.Embedding(block_size, n_embd),
+            # wpe = nn.Embedding(block_size, n_embd),
             h = nn.ModuleList([Block(n_embd=n_embd, num_heads=8) for _ in range(6)]),
             ln_f = nn.LayerNorm(n_embd)
         ))
@@ -194,9 +237,9 @@ class GPT2Model(nn.Module):
     def forward(self, xb, yb=None):
         B,T = xb.shape
         tok_emb = self.transformer.wte(xb)
-        pos = torch.arange(0, T, device=xb.device)
-        pos_emb = self.transformer.wpe(pos)
-        x = tok_emb + pos_emb
+        # pos = torch.arange(0, T, device=xb.device)
+        # pos_emb = self.transformer.wpe(pos)
+        x = tok_emb
         if self.training and debug_block_stats:
             for block_idx, block in enumerate(self.transformer.h):
                 x = block(x)
