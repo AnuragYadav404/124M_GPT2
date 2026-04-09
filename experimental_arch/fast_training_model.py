@@ -322,7 +322,7 @@ class GPT2Model(nn.Module):
 ### --------------------- --------------------- --------------------- ###
 
 
-### --------------------- LIBRARIES FOR DDP --------------------- ###
+### --------------------- LIBRARIES FOR DDP AND SETUP --------------------- ###
 
 
 from torch.distributed import init_process_group, destroy_process_group
@@ -338,14 +338,22 @@ ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
 
 if ddp:
     # use of DDP atm demands CUDA, we set the device appropriately according to rank
+    
     assert torch.cuda.is_available(), "need CUDA for DDP"
-    init_process_group(backend='nccl')
-    ddp_rank = int(os.environ['RANK'])
-    ddp_local_rank = int(os.environ['LOCAL_RANK'])
-    ddp_world_size = int(os.environ['WORLD_SIZE'])
-    device = f'cuda:{ddp_local_rank}'
-    torch.cuda.set_device(device)
-    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
+
+    init_process_group(backend='nccl') # this is required for torch.distributed, CUDA GPUs use 'nccl'
+    
+    ddp_rank = int(os.environ['RANK']) # RANK gives us the "rank" or "process_number" for the current process seing this code -> helps identify b/w proc
+
+    ddp_local_rank = int(os.environ['LOCAL_RANK'])  # LOCAL_RANK: gives the rank of a process based off num of gpus on a single node, useful for multi-node GPU clusters
+
+    ddp_world_size = int(os.environ['WORLD_SIZE']) # WORLD_SIZE: gives us the total no of process that will be running
+
+    device = f'cuda:{ddp_local_rank}' # since there are many different devices available we need indexes when declaring device: cuda:0, cuda:1 etc
+
+    torch.cuda.set_device(device) # we set the devices
+
+    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc. # here we set a boolean for the master process
 else:
     # vanilla, non-DDP run
     ddp_rank = 0
@@ -363,12 +371,16 @@ else:
 ### --------------------- --------------------- --------------------- ###
 
 
+### --------------------- torch.compile --------------------- ###
 
-model = GPT2Model(config=gpt_config).to(device=device)
-use_amp = (device == "mps")
-# model = torch.compile(model) does not seem to work with mps, so we will not use it for now, but it can be used for cuda
-# import sys;
-# sys.exit()
+model = GPT2Model(config=gpt_config)
+
+# we are only running on cuda for now
+model = torch.compile(model) # only possible on cuda for now
+
+model.to(device=device)
+
+### --------------------- --------------------- --------------------- ###
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=gpt_config.learning_rate)
 steps = 100
