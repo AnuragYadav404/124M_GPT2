@@ -1,0 +1,57 @@
+❯ uv run main.py
+Total parameters: 44696064
+Total tokens trained on: 409600
+token throughput: 8.808983172047725 tokens/ms, Loss: 10.896587371826172
+token throughput: 3.170541200370871 tokens/ms, Loss: 8.779962539672852
+token throughput: 3.1918206250033676 tokens/ms, Loss: 8.103448867797852
+token throughput: 3.1110507217402894 tokens/ms, Loss: 7.44438362121582
+token throughput: 3.264897764782279 tokens/ms, Loss: 6.9145917892456055
+token throughput: 3.229303574892594 tokens/ms, Loss: 6.537675380706787
+token throughput: 3.2188079460570145 tokens/ms, Loss: 6.091521739959717
+token throughput: 3.2311165255189622 tokens/ms, Loss: 5.958185195922852
+token throughput: 3.181925117137594 tokens/ms, Loss: 5.623104572296143
+token throughput: 3.1916391763130267 tokens/ms, Loss: 5.483750343322754
+token throughput: 3.203644272687028 tokens/ms, Loss: 5.602277755737305
+token throughput: 3.2014234673208204 tokens/ms, Loss: 5.302062511444092
+token throughput: 3.191706179472603 tokens/ms, Loss: 5.205543518066406
+token throughput: 3.201190222767642 tokens/ms, Loss: 5.1821393966674805
+token throughput: 3.173218054381392 tokens/ms, Loss: 5.088313579559326
+token throughput: 3.2201074909304928 tokens/ms, Loss: 5.10453462600708
+token throughput: 3.220882649303015 tokens/ms, Loss: 4.958862781524658
+token throughput: 3.198083738309128 tokens/ms, Loss: 5.0744709968566895
+token throughput: 3.2377912260843575 tokens/ms, Loss: 4.895940780639648
+token throughput: 3.2439225901276374 tokens/ms, Loss: 4.714447021484375
+token throughput: 3.203005177050349 tokens/ms, Loss: 4.772327899932861
+token throughput: 3.1644839022693834 tokens/ms, Loss: 4.687400817871094
+token throughput: 3.187313650006549 tokens/ms, Loss: 4.705446243286133
+token throughput: 3.207005210023106 tokens/ms, Loss: 4.584709167480469
+token throughput: 3.203965708727087 tokens/ms, Loss: 4.635773658752441
+token throughput: 3.211042853730464 tokens/ms, Loss: 4.763955116271973
+token throughput: 3.1768314367431274 tokens/ms, Loss: 4.783249378204346
+token throughput: 3.183733035836728 tokens/ms, Loss: 4.533710956573486
+token throughput: 3.1858460542217326 tokens/ms, Loss: 4.518199920654297
+token throughput: 3.241755101840569 tokens/ms, Loss: 4.541821479797363
+token throughput: 3.217042512473157 tokens/ms, Loss: 4.503358840942383
+token throughput: 3.2143086815059845 tokens/ms, Loss: 4.614849090576172
+token throughput: 3.197986106710796 tokens/ms, Loss: 4.646973609924316
+token throughput: 3.2073949843652305 tokens/ms, Loss: 4.646730422973633
+token throughput: 3.200162800487889 tokens/ms, Loss: 4.485795974731445
+token throughput: 3.2196120439144935 tokens/ms, Loss: 4.474186420440674
+token throughput: 3.189559327647656 tokens/ms, Loss: 4.6243133544921875
+token throughput: 3.048942318470307 tokens/ms, Loss: 4.400777816772461
+token throughput: 3.164786450631811 tokens/ms, Loss: 4.306544303894043
+token throughput: 3.2108724152560586 tokens/ms, Loss: 4.354253768920898
+token throughput: 3.2442968837516895 tokens/ms, Loss: 4.329395294189453
+token throughput: 3.191201056856565 tokens/ms, Loss: 4.284289836883545
+token throughput: 3.210703194954336 tokens/ms, Loss: 4.345638751983643
+token throughput: 2.990589004993173 tokens/ms, Loss: 4.236557960510254
+token throughput: 3.0599816513696103 tokens/ms, Loss: 4.416164875030518
+token throughput: 2.6953296052363216 tokens/ms, Loss: 4.4218974113464355
+token throughput: 2.9985030381455076 tokens/ms, Loss: 4.3952813148498535
+token throughput: 2.912897789741435 tokens/ms, Loss: 4.304656505584717
+token throughput: 2.8494092628731087 tokens/ms, Loss: 4.122710227966309
+token throughput: 2.886124904978066 tokens/ms, Loss: 4.1507439613342285
+I am a language model,  there the rest;, nor, to make that what hath me. But it
+Is, I are we will live and our way it not; no less; though I thank for our king! that thou d. A w
+The: come on a little grave the day. O-up
+
