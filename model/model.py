@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import time
-
+import numpy as np
 
 device = 'cpu'
 if torch.cuda.is_available():
@@ -21,35 +21,86 @@ torch.mps.manual_seed(1337)
 
 @dataclass
 class GPTConfig:
-    block_size: int = 128
-    batch_size: int = 32
-    n_embd: int = 512
-    learning_rate: float = 3e-4
+    block_size: int = 128           # block_size is: sequence size, the number of tokens in a sequence
+    batch_size: int = 32            # batch_size is: number of sequences we process in parallel
+    n_embd: int = 32               # n_embd is attention blocks dimensions
+    learning_rate: float = 3e-4     # learning_rate here is declared as a constant -> might want to update these
+    max_grad_norm = 1.0
+    num_heads = 2
 
+gpt_config = GPTConfig()
 
-block_size = 256 
-batch_size = 16 
-n_embd = 512
-learning_rate = 1e-4
-max_grad_norm = 1.0
 debug_block_stats = False
 
-with open('./dataset/input.txt', 'r', encoding='utf-8') as f:
-    text = f.read()
 
 tokenizer = tiktoken.get_encoding('gpt2')
 
-data = torch.tensor(tokenizer.encode(text), dtype=torch.long, device=device) # data goes to device
+data = np.memmap("./dataset/shakespeare.bin", dtype=np.int32, mode="r")
 vocab_size = tokenizer.n_vocab
 
 
-def get_batch(split=None):
-    start_idx = torch.randint(len(data)-block_size-1, (batch_size,), device=device)
-    # print(start_idx)
-    xb = torch.stack([data[idx:idx+block_size] for idx in start_idx])
-    yb = torch.stack([data[idx+1:idx+1+block_size] for idx in start_idx])
-    xb, yb = xb.to(device), yb.to(device)
-    return xb, yb
+
+
+class DataLoaderShakespeare():
+    def __init__(self, batch_size, block_size, process_rank, num_processes):
+
+        self.batch_size = batch_size
+        self.block_size = block_size
+
+        self.process_rank = process_rank
+        self.num_processes = num_processes
+
+        self.position_offset = 0
+
+        self.read_data()
+
+        self.reset_start()
+
+
+    def read_data(self):
+        dat = np.memmap("./dataset/shakespeare.bin", dtype=np.int32, mode="r")
+        self.tokens = torch.tensor(dat, dtype=torch.long)
+
+
+    def reset_start(self):
+        self.current_position = self.batch_size*self.block_size*self.process_rank + self.position_offset # each initialized at [0, 32, 64, 96]
+
+    def get_batch(self, split=None):
+        # start_idx of self is now computed
+        B, T = self.batch_size, self.block_size
+
+        buf = self.tokens[self.current_position : self.current_position+B*T+1]
+
+        xb = (buf[:-1]).view(B, T) # inputs
+        yb = (buf[1:]).view(B, T) # targets
+
+        # now we are going to do checks are re_initialize our current_pos
+        self.current_position += B * T * self.num_processes # [0 -> 128, 32->160 and so on]
+        # now it is possible that next batch of loading is not possible
+        if(self.current_position + (B*T*self.num_processes + 1) > len(self.tokens)): # here we check if we can get the next entire batch or no, otherwise we loop[]
+            # here we have a single training data, that we loop over, so, we can include an offset
+            if(self.position_offset + B*T*self.num_processes + 1 > len(self.tokens)):
+                self.position_offset = 0
+            else:
+                self.position_offset +=1  # so all the next training loops start at index say 1, there will be a case when offset becomes big enough, that we have to reset it
+            # if offset + B*T*num_process + 1 > len(self.tokens): here we reset offset
+            self.reset_start()
+
+        return xb, yb
+
+
+
+# def get_batch(split=None):
+#     start_idx = torch.randint(len(data)-block_size-1, (batch_size,))
+#     # print(start_idx)
+#     xb = torch.stack([torch.from_numpy(data[idx:idx+block_size].copy()) for idx in start_idx])
+#     yb = torch.stack([torch.from_numpy(data[idx+1:idx+1+block_size].copy()) for idx in start_idx])
+#     xb, yb = xb.to(device), yb.to(device)
+#     return xb, yb
+
+
+
+### --------------------- MODEL DEFINITION --------------------- ###
 
 
 # class Head(nn.Module):
@@ -126,7 +177,7 @@ class CasualSelfAttention(nn.Module):
         self.c_proj.NANOGPT_SCALE_INIT = 1
         self.num_heads = num_heads
         self.head_size = head_size
-        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
+        # self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
         self.embed_positions = CustomRoFormerSinusoidalPositionalEmbedding(seq_len=block_size, n_embd=head_size)
 
     def apply_rotary_positional_embedding(self, x, sinusoidal_pos):
@@ -189,7 +240,7 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, n_embd, num_heads):
+    def __init__(self, n_embd, num_heads, block_size):
         super().__init__()
         self.head_size = n_embd//num_heads
         self.cs_attn = CasualSelfAttention(num_heads=num_heads, head_size=self.head_size, n_embd=n_embd, block_size=block_size)
@@ -204,17 +255,18 @@ class Block(nn.Module):
 
 class GPT2Model(nn.Module):
 
-    def __init__(self):
+    def __init__(self, config):
         super().__init__()
+        self.config = config
 
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(vocab_size, n_embd),
+            wte = nn.Embedding(vocab_size, self.config.n_embd),
             # wpe = nn.Embedding(block_size, n_embd),
-            h = nn.ModuleList([Block(n_embd=n_embd, num_heads=8) for _ in range(16)]),
-            ln_f = nn.LayerNorm(n_embd)
+            h = nn.ModuleList([Block(n_embd=self.config.n_embd, num_heads=self.config.num_heads, block_size=self.config.block_size) for _ in range(16)]),
+            ln_f = nn.LayerNorm(self.config.n_embd)
         ))
 
-        self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
+        self.lm_head = nn.Linear(self.config.n_embd, vocab_size, bias=False)
         # we can use same lm_head and token_emb_table because of weight tying
         self.transformer.wte.weight = self.lm_head.weight
         self.apply(self._init_weights)
@@ -268,7 +320,7 @@ class GPT2Model(nn.Module):
     def generate(self, xb, max_new_tokens):
         for _ in range(max_new_tokens):
             with torch.no_grad():
-                xb_cond = xb[:, -block_size:]
+                xb_cond = xb[:, -self.config.block_size:]
 
                 logits, _ = self(xb_cond) # here loss is mostly useless
 
@@ -290,38 +342,54 @@ class GPT2Model(nn.Module):
 
         return xb
 
-model = GPT2Model().to(device=device)
+
+
+model = GPT2Model(config=gpt_config).to(device=device)
 use_amp = (device == "mps")
 # model = torch.compile(model) does not seem to work with mps, so we will not use it for now, but it can be used for cuda
 # import sys;
 # sys.exit()
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+optimizer = torch.optim.AdamW(model.parameters(), lr=gpt_config.learning_rate)
 steps = 100
 # we also want to print the count of parameters in the model
 total_params = sum(p.numel() for p in model.parameters())
 print(f'Total parameters: {total_params}')
 # we probably also want to count the number of token the model trains upon during this time, which is B*T*steps
-total_tokens = batch_size*block_size*steps
+total_tokens = gpt_config.batch_size*gpt_config.block_size*steps
 print(f'Total tokens trained on: {total_tokens}')
 
+
+dataloader = DataLoaderShakespeare(batch_size=gpt_config.batch_size, block_size=gpt_config.block_size, process_rank=0, num_processes=1)
+
 for step in range(500):
+
     t0=time.time()
+
     optimizer.zero_grad()
-    xb, yb = get_batch()
+
+    xb, yb = dataloader.get_batch()
+    xb, yb = xb.to(device), yb.to(device)
+
     B,T = xb.shape
     
     logits, loss = model(xb, yb)
         
     # import code; code.interact(local=locals())
     torch.mps.synchronize()
+
     t1=time.time()
+
     if(step%10 == 0):
         dt = (t1-t0)*1000
         print(f'token throughput: {B*T/dt} tokens/ms, Loss: {loss.item()}')
+
+
     loss.backward()
     # we also want to do gradient clipping here, which we will do via norm grad clip:
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+
+    torch.nn.utils.clip_grad_norm_(model.parameters(), gpt_config.max_grad_norm)
+
     optimizer.step()
 
 # generation part remains same

@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import time
-
+import numpy as np
 ### ----------------------------------------------------------- ###
 
 
@@ -50,23 +50,102 @@ debug_block_stats = False
 
 ### --------------------- DATA READ AND TOKENIZATION --------------------- ###
 
-with open('./dataset/input.txt', 'r', encoding='utf-8') as f:
-    text = f.read()
-
 tokenizer = tiktoken.get_encoding('gpt2')
 
-data = torch.tensor(tokenizer.encode(text), dtype=torch.long, device=device) # data goes to device
+data = np.memmap("./dataset/shakespeare.bin", dtype=np.int32, mode="r")
 vocab_size = tokenizer.n_vocab
 
 ### --------------------- --------------------- --------------------- ###
 
 ### --------------------- SIMPLE GET BATCH DATA LOADER --------------------- ###
 
-def get_batch(block_size, batch_size, split=None):
-    start_idx = torch.randint(len(data)-block_size-1, (batch_size,), device=device)
+# here we need to go a little ahead in designing a dataloader class
+
+# so we have to decide on the type of data loader
+# for now we are using tiny shakespear, but this will run out quick
+# a better choice is: fineweb
+# but for that we need to download big shard files
+
+
+# let's say we continue to use shakespear dataset
+# things remain almost the same, but we now need to take in the account of n_gpus, and hence iteration steps
+
+class DataLoaderShakespeare():
+    def __init__(self, batch_size, block_size, process_rank, num_processes):
+
+        self.batch_size = batch_size
+        self.block_size = block_size
+
+        self.process_rank = process_rank
+        self.num_processes = num_processes
+
+        self.position_offset = 0
+
+        self.read_data()
+
+        self.reset()
+
+    def read_data(self):
+        # dat = np.load("./dataset/shakespeare.bin")
+        # dat = dat.astype(np.int32) # added after video
+        # self.tokens = torch.tensor(dat, dtype=torch.long)
+        dat = np.memmap("./dataset/shakespeare.bin", dtype=np.int32, mode="r")
+        self.tokens = torch.tensor(dat, dtype=torch.long)
+
+
+    def reset_start(self):
+        self.current_pos = self.batch_size*self.block_size*self.process_rank + self.position_offset # each initialized at [0, 32, 64, 96]
+
+    def get_batch(self, split=None):
+        # start_idx of self is now computed
+        B, T = self.batch_size, self.block_size
+
+        buf = self.tokens[self.current_position : self.current_position+B*T+1]
+
+        x = (buf[:-1]).view(B, T) # inputs
+        y = (buf[1:]).view(B, T) # targets
+
+        # now we are going to do checks are re_initialize our current_pos
+        self.current_pos += B * T * self.num_processes # [0 -> 128, 32->160 and so on]
+        # now it is possible that next batch of loading is not possible
+        if(self.current_pos + (B*T*self.num_processes + 1) > len(self.tokens)): # here we check if we can get the next entire batch or no, otherwise we loop[]
+            # here we have a single training data, that we loop over, so, we can include an offset
+            if(self.position_offset + B*T*self.num_processes + 1 > len(self.tokens)):
+                self.position_offset = 0
+            else:
+                self.position_offset +=1  # so all the next training loops start at index say 1, there will be a case when offset becomes big enough, that we have to reset it
+            # if offset + B*T*num_process + 1 > len(self.tokens): here we reset offset
+            self.reset_start()
+
+        return xb, yb
+
+
+
+
+# so get_batch needs to be modified to take in the account of DDP
+# we have n_rank, and a world_size
+# so we will have to modify the start_idx to take in the account of world_size, so that each process gets a different part of the data
+# so for say first iteration, we 
+# so let's say B = 4, and T = 8
+# so for each GPU, starting point will be: B*T*(n_rank), [0, 32, 64, 96]
+# for the next iter: new_pos: start_pos + (B*T*num_proc): 0 + (8*4*4)
+# and we also probably want to check if the next batch is possible to load or not
+# so let's say: self.current_pos + (B*T*num_proc) + 1 > len(tokens): reset
+
+# OR, we can have a fuzzy and random check
+# so for each process, we are only considered if it can fetch the next batch or no
+# this only works if, we have a single shard of data, but if we had many, we would have to iterate over them sequentially
+# i guess, this is where a dataloader class helps
+
+
+
+
+
+def get_batch(block_size, batch_size, process_rank,  process_world_size, split=None):
+    start_idx = torch.randint(len(data)-block_size-1, (batch_size,))
     # print(start_idx)
-    xb = torch.stack([data[idx:idx+block_size] for idx in start_idx])
-    yb = torch.stack([data[idx+1:idx+1+block_size] for idx in start_idx])
+    xb = torch.stack([torch.from_numpy(data[idx:idx+block_size].copy()) for idx in start_idx])
+    yb = torch.stack([torch.from_numpy(data[idx+1:idx+1+block_size].copy()) for idx in start_idx])
     xb, yb = xb.to(device), yb.to(device)
     return xb, yb
 
@@ -152,7 +231,7 @@ class CasualSelfAttention(nn.Module):
         self.c_proj.NANOGPT_SCALE_INIT = 1
         self.num_heads = num_heads
         self.head_size = head_size
-        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
+        # self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
         self.embed_positions = CustomRoFormerSinusoidalPositionalEmbedding(seq_len=block_size, n_embd=head_size)
 
     def apply_rotary_positional_embedding(self, x, sinusoidal_pos):
@@ -388,13 +467,16 @@ steps = 100
 total_params = sum(p.numel() for p in model.parameters())
 print(f'Total parameters: {total_params}')
 # we probably also want to count the number of token the model trains upon during this time, which is B*T*steps
-total_tokens = gpt_config.batch_size*gpt_config.block_size*steps
+total_tokens = gpt_config.batch_size*gpt_config.block_size*steps*ddp_world_size # we multiply by world size to get the total tokens trained on across all processes
 print(f'Total tokens trained on: {total_tokens}')
 
 for step in range(500):
     t0=time.time()
     optimizer.zero_grad()
+
     xb, yb = get_batch(block_size=gpt_config.block_size, batch_size=gpt_config.batch_size)
+    xb, yb = xb.to(device), yb.to(device)
+    
     B,T = xb.shape
     
     logits, loss = model(xb, yb)
