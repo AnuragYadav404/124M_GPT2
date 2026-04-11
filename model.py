@@ -21,12 +21,12 @@ torch.mps.manual_seed(1337)
 
 @dataclass
 class GPTConfig:
-    block_size: int = 128           # block_size is: sequence size, the number of tokens in a sequence
-    batch_size: int = 32            # batch_size is: number of sequences we process in parallel
-    n_embd: int = 32               # n_embd is attention blocks dimensions
+    block_size: int = 256           # block_size is: sequence size, the number of tokens in a sequence
+    batch_size: int = 16            # batch_size is: number of sequences we process in parallel
+    n_embd: int = 256               # n_embd is attention blocks dimensions
     learning_rate: float = 3e-4     # learning_rate here is declared as a constant -> might want to update these
     max_grad_norm = 1.0
-    num_heads = 2
+    num_heads = 8
     debug_block_stats = False
 
 gpt_config = GPTConfig()
@@ -120,18 +120,44 @@ print(f'Total tokens trained on: {total_tokens}')
 
 dataloader = DataLoaderShakespeare(batch_size=gpt_config.batch_size, block_size=gpt_config.block_size, process_rank=0, num_processes=1)
 
+# as of current mode configs, we exceed mem at batch size 128, we can instead use grad_accum with batch_size of 32
+# accum steps of 4
+n_accum_steps = 8
+
 for step in range(500):
 
     t0=time.time()
 
     optimizer.zero_grad()
 
-    xb, yb = dataloader.get_batch()
-    xb, yb = xb.to(device), yb.to(device)
-
-    B,T = xb.shape
+    loss_accum = 0
     
-    logits, loss = model(xb, yb)
+    for accum_step in range(n_accum_steps):
+
+        xb, yb = dataloader.get_batch()
+        xb, yb = xb.to(device), yb.to(device)
+
+        B,T = xb.shape
+        
+        logits, loss = model(xb, yb)
+        
+        
+
+        # we want to accumulate loss here, and then do backward only after n_accum_steps
+        # so here we need to mean out the loss, because if we are doing n_accum_steps,
+        # gradients will be registered n_accum_steps time
+        # so loss here needs to be representative of the n_accum_steps we take
+        # if we just use normal loss, the gradients at the end will be: correct_val * n_accum_steps
+        # say in case of no accum, we had loss = 4: 16/4 (4 x, 4 loss for each, averaged over 4)
+        # now we use 2 accum: so in losses become: [4, 4]: (8/2)[4x2, 4x2] = [8,8]
+        # Now this [4,4] will flow to the gradients and accumulate to a total loss of 8, so we average out by n_accum = 2 => [4/2, 4/2]
+
+        loss = loss/n_accum_steps
+
+        loss_accum += loss.item()
+
+        loss.backward()
+
         
     # import code; code.interact(local=locals())
     torch.mps.synchronize()
@@ -140,10 +166,9 @@ for step in range(500):
 
     if(step%10 == 0):
         dt = (t1-t0)*1000
-        print(f'token throughput: {B*T/dt} tokens/ms, Loss: {loss.item()}')
+        print(f'token throughput: {B*T/dt} tokens/ms, Loss: {loss_accum}')
 
-
-    loss.backward()
+    
     # we also want to do gradient clipping here, which we will do via norm grad clip:
 
     torch.nn.utils.clip_grad_norm_(model.parameters(), gpt_config.max_grad_norm)
