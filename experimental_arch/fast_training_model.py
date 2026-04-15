@@ -36,7 +36,7 @@ torch.mps.manual_seed(1337)
 
 @dataclass
 class GPTConfig:
-    block_size: int = 128           # block_size is: sequence size, the number of tokens in a sequence
+    block_size: int = 512           # block_size is: sequence size, the number of tokens in a sequence
     batch_size: int = 32            # batch_size is: number of sequences we process in parallel
     n_embd: int = 512               # n_embd is attention blocks dimensions
     learning_rate: float = 3e-4     # learning_rate here is declared as a constant -> might want to update these
@@ -199,8 +199,8 @@ else:
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda"
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = "mps"
+    elif torch.backends.mps.is_available():
+        device = 'mps'  
     print(f"using device: {device}")
 
 ### --------------------- --------------------- --------------------- ###
@@ -230,24 +230,29 @@ print(f'Total tokens trained on: {total_tokens}')
 
 dataloader = DataLoaderShakespeare(batch_size=gpt_config.batch_size, block_size=gpt_config.block_size, process_rank=ddp_local_rank, num_processes=ddp_world_size)
 
+grad_accum_steps = 8
 
-# so now we want to implement gradient accumulation, so that we can have a larger effective batch size, without running out of memory
-# so we will have to do optimizer.step() and optimizer.zero_grad() only after a certain number of steps, which we will call accumulation_steps
-# so we will have to modify our training loop to do this, and we will also have to modify our get_batch function to return the same batch of data for a certain number of steps, which we will call accumulation_steps          
 
 for step in range(500):
     t0=time.time()
     optimizer.zero_grad()
+    loss_accum = 0
+    for accum_step in range(grad_accum_steps):
 
-    xb, yb = dataloader.get_batch()
+        xb, yb = dataloader.get_batch()
 
-    xb, yb = xb.to(device), yb.to(device)
-    
-    B,T = xb.shape
-    
-    logits, loss = model(xb, yb)
+        xb, yb = xb.to(device), yb.to(device)
         
-    # import code; code.interact(local=locals())
+        B,T = xb.shape
+        
+        logits, loss = model(xb, yb)
+            
+        # import code; code.interact(local=locals())
+        loss = loss/grad_accum_steps
+
+        loss_accum += loss.item()
+
+        loss.backward()
 
 
     if device == "cuda":
@@ -258,8 +263,8 @@ for step in range(500):
     t1=time.time()
     if(step%10 == 0):
         dt = (t1-t0)*1000
-        print(f'token throughput: {B*T/dt} tokens/ms, Loss: {loss.item()}')
-    loss.backward()
+        print(f'token throughput: {B*T/dt} tokens/ms, Loss: {loss_accum}')
+    
     # we also want to do gradient clipping here, which we will do via norm grad clip:
     torch.nn.utils.clip_grad_norm_(model.parameters(), gpt_config.max_grad_norm)
     optimizer.step()
